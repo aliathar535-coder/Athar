@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Ultra Zoom Photo Studio</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    body { font-family: sans-serif; background-color: #121212; color: #fff; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+    header { background: #1f1f1f; padding: 10px 15px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; }
+    header h1 { font-size: 15px; color: #00bcd4; }
+    .main-layout { display: flex; flex: 1; height: calc(100vh - 50px); overflow: hidden; }
+    .sidebar { width: 280px; background: #1a1a1a; padding: 10px; overflow-y: auto; border-right: 1px solid #333; display: flex; flex-direction: column; gap: 8px; }
+    .section-title { font-size: 12px; text-transform: uppercase; color: #888; font-weight: bold; margin-top: 4px; }
+    .btn-group { display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px; }
+    .btn { padding: 8px; background: #2a2a2a; color: #fff; border: 1px solid #444; border-radius: 4px; font-size: 11px; cursor: pointer; text-align: center; }
+    .btn:active { background: #007bff; }
+    .btn-primary { background: #007bff; font-weight: bold; }
+    .btn-danger { background: #d9534f; }
+    .btn-success { background: #28a745; }
+    .canvas-area { flex: 1; position: relative; background: #050505; overflow: auto; display: flex; align-items: center; justify-content: center; }
+    #canvasWrapper { transform-origin: 0 0; }
+    canvas { background-color: #111; box-shadow: 0 0 15px rgba(0,0,0,0.8); }
+    .photo-thumb-list { display: flex; gap: 4px; overflow-x: auto; padding: 4px; background: #111; border: 1px solid #333; max-height: 70px; }
+    .thumb-item { width: 45px; height: 45px; object-fit: cover; border: 2px solid transparent; border-radius: 3px; cursor: pointer; }
+    .thumb-item.active { border-color: #00bcd4; }
+    .control-row { font-size: 11px; display: flex; flex-direction: column; gap: 2px; }
+    .control-row input { width: 100%; accent-color: #00bcd4; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>📸 Ultra Zoom Photo Studio</h1>
+    <div style="display:flex; gap:5px;">
+      <button class="btn btn-success" onclick="saveImage('png')">Save PNG</button>
+      <button class="btn btn-primary" onclick="saveImage('jpg')">Save JPG</button>
+    </div>
+  </header>
+
+  <div class="main-layout">
+    <div class="sidebar">
+      <input type="file" id="imgInput" accept="image/*" multiple style="display:none;" onchange="handleImageUpload(event)">
+      <button class="btn btn-primary" style="padding:10px;" onclick="document.getElementById('imgInput').click()">➕ Add Photos (Max 30)</button>
+      <div id="countStatus" style="font-size:11px; color:#aaa; text-align:center;">Selected: 0 / 30</div>
+
+      <div class="section-title">History Controls</div>
+      <div class="btn-group">
+        <button class="btn" onclick="undo()">↩️ Undo</button>
+        <button class="btn" onclick="redo()">↪️ Redo</button>
+      </div>
+
+      <div class="section-title">Zoom & Pan</div>
+      <div class="btn-group">
+        <button class="btn" onclick="adjustZoom(0.2)">🔍 Zoom In</button>
+        <button class="btn" onclick="adjustZoom(-0.2)">🔍 Zoom Out</button>
+      </div>
+      <button class="btn" onclick="resetZoom()">🔄 Reset Zoom</button>
+
+      <div class="section-title">Selected Photo Layer</div>
+      <div class="photo-thumb-list" id="thumbList"></div>
+      <div class="btn-group">
+        <button class="btn" onclick="moveActiveImage(0, -10)">⬆️ Up</button>
+        <button class="btn" onclick="moveActiveImage(0, 10)">⬇️ Down</button>
+        <button class="btn" onclick="moveActiveImage(-10, 0)">⬅️ Left</button>
+        <button class="btn" onclick="moveActiveImage(10, 0)">➡️ Right</button>
+      </div>
+      <div class="btn-group">
+        <button class="btn" onclick="rotateActiveImage(90)">🔄 Rotate</button>
+        <button class="btn btn-danger" onclick="deleteActiveImage()">🗑️ Delete</button>
+      </div>
+
+      <div class="section-title">Filters</div>
+      <div class="control-row">
+        <label>Brightness: <span id="bVal">100</span>%</label>
+        <input type="range" id="brightness" min="0" max="200" value="100" oninput="updateFilters()">
+      </div>
+      <div class="control-row">
+        <label>Contrast: <span id="cVal">100</span>%</label>
+        <input type="range" id="contrast" min="0" max="200" value="100" oninput="updateFilters()">
+      </div>
+      <div class="control-row">
+        <label>Saturation: <span id="sVal">100</span>%</label>
+        <input type="range" id="saturate" min="0" max="200" value="100" oninput="updateFilters()">
+      </div>
+
+      <button class="btn btn-danger" style="margin-top:10px;" onclick="clearCanvas()">🗑️ Clear All</button>
+    </div>
+
+    <div class="canvas-area">
+      <div id="canvasWrapper">
+        <canvas id="mainCanvas" width="3000" height="2000"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('mainCanvas');
+    const ctx = canvas.getContext('2d');
+    const wrapper = document.getElementById('canvasWrapper');
+    
+    let layers = [];
+    let activeIndex = -1;
+    let zoomLevel = 1;
+    let historyStack = [], redoStack = [];
+
+    function saveState() {
+      if (historyStack.length > 15) historyStack.shift();
+      historyStack.push(JSON.stringify(layers.map(l => ({ x: l.x, y: l.y, w: l.w, h: l.h, rotation: l.rotation, src: l.img.src }))));
+      redoStack = [];
+    }
+
+    function handleImageUpload(e) {
+      const files = Array.from(e.target.files);
+      if (layers.length + files.length > 30) {
+        alert("अधिकतम 30 फोटो ही चुन सकते हैं!");
+        return;
+      }
+      saveState();
+      files.forEach(file => {
+        const reader = new FileReader();
+        reader.onload = function(evt) {
+          const img = new Image();
+          img.onload = function() {
+            layers.push({ img: img, x: (layers.length % 5) * 400 + 50, y: Math.floor(layers.length / 5) * 300 + 50, w: 400, h: (img.height / img.width) * 400, rotation: 0 });
+            activeIndex = layers.length - 1;
+            render();
+            updateThumbs();
+          };
+          img.src = evt.target.result;
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function render() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const b = document.getElementById('brightness').value;
+      const c = document.getElementById('contrast').value;
+      const s = document.getElementById('saturate').value;
+      ctx.filter = `brightness(${b}%) contrast(${c}%) saturate(${s}%)`;
+
+      layers.forEach((layer, idx) => {
+        ctx.save();
+        ctx.translate(layer.x + layer.w / 2, layer.y + layer.h / 2);
+        ctx.rotate((layer.rotation * Math.PI) / 180);
+        ctx.drawImage(layer.img, -layer.w / 2, -layer.h / 2, layer.w, layer.h);
+        if (idx === activeIndex) {
+          ctx.strokeStyle = '#00bcd4';
+          ctx.lineWidth = 4;
+          ctx.strokeRect(-layer.w / 2, -layer.h / 2, layer.w, layer.h);
+        }
+        ctx.restore();
+      });
+    }
+
+    function updateThumbs() {
+      const container = document.getElementById('thumbList');
+      document.getElementById('countStatus').innerText = `Selected: ${layers.length} / 30`;
+      container.innerHTML = '';
+      layers.forEach((layer, idx) => {
+        const imgEl = document.createElement('img');
+        imgEl.src = layer.img.src;
+        imgEl.className = `thumb-item ${idx === activeIndex ? 'active' : ''}`;
+        imgEl.onclick = () => { activeIndex = idx; render(); updateThumbs(); };
+        container.appendChild(imgEl);
+      });
+    }
+
+    function moveActiveImage(dx, dy) {
+      if (activeIndex >= 0) { saveState(); layers[activeIndex].x += dx; layers[activeIndex].y += dy; render(); }
+    }
+    function rotateActiveImage(deg) {
+      if (activeIndex >= 0) { saveState(); layers[activeIndex].rotation = (layers[activeIndex].rotation + deg) % 360; render(); }
+    }
+    function deleteActiveImage() {
+      if (activeIndex >= 0) { saveState(); layers.splice(activeIndex, 1); activeIndex = layers.length - 1; render(); updateThumbs(); }
+    }
+    function adjustZoom(delta) {
+      zoomLevel = Math.max(0.2, zoomLevel + delta);
+      wrapper.style.transform = `scale(${zoomLevel})`;
+    }
+    function resetZoom() { zoomLevel = 1; wrapper.style.transform = `scale(1)`; }
+    function updateFilters() {
+      document.getElementById('bVal').innerText = document.getElementById('brightness').value;
+      document.getElementById('cVal').innerText = document.getElementById('contrast').value;
+      document.getElementById('sVal').innerText = document.getElementById('saturate').value;
+      render();
+    }
+    function undo() {
+      if (historyStack.length > 0) {
+        redoStack.push(JSON.stringify(layers.map(l => ({ x: l.x, y: l.y, w: l.w, h: l.h, rotation: l.rotation, src: l.img.src }))));
+        restoreState(JSON.parse(historyStack.pop()));
+      }
+    }
+    function redo() {
+      if (redoStack.length > 0) {
+        historyStack.push(JSON.stringify(layers.map(l => ({ x: l.x, y: l.y, w: l.w, h: l.h, rotation: l.rotation, src: l.img.src }))));
+        restoreState(JSON.parse(redoStack.pop()));
+      }
+    }
+    function restoreState(state) {
+      layers = state.map(item => {
+        const img = new Image(); img.src = item.src;
+        return { img, x: item.x, y: item.y, w: item.w, h: item.h, rotation: item.rotation };
+      });
+      activeIndex = layers.length - 1;
+      setTimeout(() => { render(); updateThumbs(); }, 50);
+    }
+    function saveImage(format) {
+      const link = document.createElement('a');
+      link.download = `Ultra_Zoom_Stitch_${Date.now()}.${format}`;
+      link.href = canvas.toDataURL(`image/${format === 'jpg' ? 'jpeg' : 'png'}`, 0.95);
+      link.click();
+    }
+    function clearCanvas() { saveState(); layers = []; activeIndex = -1; render(); updateThumbs(); }
+  </script>
+</body>
+</html>
